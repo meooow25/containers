@@ -404,6 +404,7 @@ test-suite map-strictness-properties
 
   other-modules:
     Utils.IsUnit
+    Utils.Strictness
 
   if impl(ghc >= 8.6)
     build-depends:
