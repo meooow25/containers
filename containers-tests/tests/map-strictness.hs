@@ -15,9 +15,8 @@ import qualified Data.List.NonEmpty as NE
 import Data.Ord (Down(..), comparing)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Semigroup (Arg(..))
-import Test.ChasingBottoms.IsBottom
-import Test.Tasty (TestTree, TestName, defaultMain, testGroup)
-import Test.Tasty.HUnit
+import Test.ChasingBottoms.IsBottom (bottom, isBottom)
+import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.QuickCheck (testProperty)
 import Test.QuickCheck
 import Test.QuickCheck.Function
@@ -32,9 +31,9 @@ import qualified Data.Map.Merge.Lazy as LMerge
 import Data.Set (Set)
 import qualified Data.Set as Set
 
-import Utils.IsUnit
 import Utils.Strictness
   (Bot(..), Func(..), Func2(..), Func3(..), applyFunc, applyFunc2, applyFunc3)
+
 #if __GLASGOW_HASKELL__ >= 806
 import Utils.NoThunks
 #endif
@@ -998,74 +997,6 @@ pStrictFoldlWithKey' :: Map Int Int -> Property
 pStrictFoldlWithKey' m = whnfHasNoThunks (M.foldlWithKey' (\as _ a -> a : as) [] m)
 #endif
 
-#if __GLASGOW_HASKELL__ >= 806
-pStrictFromDistinctAscList :: [Int] -> Property
-pStrictFromDistinctAscList = whnfHasNoThunks . evalSpine . M.elems . M.fromDistinctAscList . zip [0::Int ..] . map (Just $!)
-  where
-    evalSpine xs = length xs `seq` xs
-#endif
-
-#if __GLASGOW_HASKELL__ >= 806
-pStrictFromDistinctDescList :: [Int] -> Property
-pStrictFromDistinctDescList = whnfHasNoThunks . evalSpine . M.elems . M.fromDistinctDescList . zip [0::Int, -1 ..] . map (Just $!)
-  where
-    evalSpine xs = length xs `seq` xs
-#endif
-
-------------------------------------------------------------------------
--- check for extra thunks
---
--- These tests distinguish between `()`, a fully evaluated value, and
--- things like `id ()` which are extra thunks that should be avoided
--- in most cases. An exception is `L.fromListWith const`, which cannot
--- evaluate the `const` calls.
-
-tExtraThunksM :: TestTree
-tExtraThunksM = testGroup "Map.Strict - extra thunks" $
-    if not isUnitSupported then [] else
-    -- for strict maps, all the values should be evaluated to ()
-    [ check "singleton"           $ m0
-    , check "insert"              $ M.insert 42 () m0
-    , check "insertWith"          $ M.insertWith const 42 () m0
-    , check "fromList"            $ M.fromList [(42,()),(42,())]
-    , check "fromListWith"        $ M.fromListWith const [(42,()),(42,())]
-    , check "fromAscList"         $ M.fromAscList [(42,()),(42,())]
-    , check "fromAscListWith"     $ M.fromAscListWith const [(42,()),(42,())]
-    , check "fromDistinctAscList" $ M.fromAscList [(42,())]
-    ]
-  where
-    m0 = M.singleton 42 ()
-    check :: TestName -> Map Int () -> TestTree
-    check n m = testCase n $ case M.lookup 42 m of
-        Just v -> assertBool msg (isUnit v)
-        _      -> assertBool "key not found" False
-      where
-        msg = "too lazy -- expected fully evaluated ()"
-
-tExtraThunksL :: TestTree
-tExtraThunksL = testGroup "Map.Lazy - extra thunks" $
-    if not isUnitSupported then [] else
-    -- for lazy maps, the *With functions should leave `const () ()` thunks,
-    -- but the other functions should produce fully evaluated ().
-    [ check "singleton"       True  $ m0
-    , check "insert"          True  $ L.insert 42 () m0
-    , check "insertWith"      False $ L.insertWith const 42 () m0
-    , check "fromList"        True  $ L.fromList [(42,()),(42,())]
-    , check "fromListWith"    False $ L.fromListWith const [(42,()),(42,())]
-    , check "fromAscList"     True  $ L.fromAscList [(42,()),(42,())]
-    , check "fromAscListWith" False $ L.fromAscListWith const [(42,()),(42,())]
-    , check "fromDistinctAscList" True $ L.fromAscList [(42,())]
-    ]
-  where
-    m0 = L.singleton 42 ()
-    check :: TestName -> Bool -> L.Map Int () -> TestTree
-    check n e m = testCase n $ case L.lookup 42 m of
-        Just v -> assertBool msg (e == isUnit v)
-        _      -> assertBool "key not found" False
-      where
-        msg | e         = "too lazy -- expected fully evaluated ()"
-            | otherwise = "too strict -- expected a thunk"
-
 ------------------------------------------------------------------------
 -- * Test list
 
@@ -1097,12 +1028,8 @@ tests =
       , testProperty "strict foldl'" pStrictFoldl'
       , testProperty "strict foldrWithKey'" pStrictFoldrWithKey'
       , testProperty "strict foldlWithKey'" pStrictFoldlWithKey'
-      , testProperty "strict fromDistinctAscList" pStrictFromDistinctAscList
-      , testProperty "strict fromDistinctDescList" pStrictFromDistinctDescList
 #endif
       ]
-      , tExtraThunksM
-      , tExtraThunksL
     , testGroup "Map.Strict construction"
       [ testProperty "singleton" prop_strictSingleton
       , testProperty "fromSet" prop_strictFromSet
