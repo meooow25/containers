@@ -56,6 +56,15 @@ instance (CoArbitrary a, Function a, Arbitrary b) => Arbitrary (Func a b) where
     FuncStrict f -> FuncStrict <$> shrink f
 
 -- | Function which may be lazy in its arguments
+
+-- Note: We have two separate cases here because we want to generate functions
+-- of type `a -> b -> c` with all possible strictness configurations.
+-- `Func a (Func b c)` is not enough for this, since it cannot generate
+-- functions that are conditionally lazy in the first argument, for instance:
+--
+-- leftLazyOr :: Bool -> Bool -> Bool
+-- leftLazyOr a b = if b then True else a
+
 data Func2 a b c
   = F2A (Func a (Func b c))
   | F2B (Func b (Func a c))
@@ -76,6 +85,8 @@ applyFunc2 fun2 x y = case fun2 of
   F2B fun -> applyFunc (applyFunc fun y) x
 
 -- | Function which may be lazy in its arguments
+
+-- See Note on Func2.
 data Func3 a b c d
   = F3A (Func a (Func2 b c d))
   | F3B (Func b (Func2 a c d))
