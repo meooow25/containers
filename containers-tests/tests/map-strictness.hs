@@ -30,7 +30,9 @@ import Data.Map.Merge.Lazy (WhenMatched, WhenMissing)
 import qualified Data.Map.Merge.Lazy as LMerge
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.Containers.ListUtils (nubOrd)
 
+import Utils.ArbitrarySetMap (setFromList, mapFromKeysList)
 import Utils.Strictness
   (Bot(..), Func(..), Func2(..), Func3(..), applyFunc, applyFunc2, applyFunc3)
 
@@ -40,10 +42,19 @@ import Utils.NoThunks
 
 instance (Arbitrary k, Arbitrary v, Ord k) =>
          Arbitrary (Map k v) where
-    arbitrary = M.fromList `fmap` arbitrary
+  arbitrary = do
+    Sorted xs <- arbitrary
+    m <- mapFromKeysList $ nubOrd xs
+
+    -- Force the values to WHNF. Should use liftRnf2 when that's available.
+    let !_ = foldr seq () m
+
+    pure m
 
 instance (Arbitrary a, Ord a) => Arbitrary (Set a) where
-  arbitrary = Set.fromList <$> arbitrary
+  arbitrary = do
+    Sorted xs <- arbitrary
+    setFromList $ nubOrd xs
 
 apply2 :: Fun (a, b) c -> a -> b -> c
 apply2 f a b = apply f (a, b)
