@@ -15,6 +15,8 @@ module Utils.ArbitrarySetMap
 import Control.Monad (liftM, liftM3, liftM4)
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Class
+import qualified Data.List as List
+import Data.Maybe (fromMaybe)
 import Test.QuickCheck
 
 import Data.Set (Set)
@@ -68,13 +70,7 @@ mkArbSet step n
 setFromList :: [a] -> Gen (Set a)
 setFromList xs = flip evalStateT xs $ mkArbSet step (length xs)
   where
-    step = do
-      xxs <- get
-      case xxs of
-        x : xs -> do
-          put xs
-          pure x
-        [] -> error "setFromList"
+    step = state $ fromMaybe (error "setFromList") . List.uncons
 
 {--------------------------------------------------------------------
   Map
@@ -117,11 +113,5 @@ mkArbMap step n
 mapFromKeysList :: Arbitrary a => [k] -> Gen (Map k a)
 mapFromKeysList xs = flip evalStateT xs $ mkArbMap step (length xs)
   where
-    step = do
-      xxs <- get
-      case xxs of
-        x : xs -> do
-          put xs
-          pure x
-        [] -> error "mapFromKeysList"
+    step = state $ fromMaybe (error "mapFromKeysList") . List.uncons
 {-# INLINABLE mapFromKeysList #-}
