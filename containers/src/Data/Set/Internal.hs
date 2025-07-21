@@ -221,21 +221,41 @@ module Data.Set.Internal (
             , showTreeWith
             , valid
 
+            -- * General combining function
+            --
+            -- ** Simple combining function
+            , SimpleWhenMissing
+            , dropMissing
+            , preserveMissing
+            , filterMissing
+            , SimpleWhenMatched
+            , filterMatched
+            , merge
+
+            -- ** Applicative combining function
+            , WhenMissing
+            , runWhenMissing
+            , filterAMissing
+            , WhenMatched
+            , runWhenMatched
+            , filterAMatched
+            , mergeA
+
             -- Internals (for testing)
             , bin
             , balanced
             , link
-            , merge
+            , link2
             ) where
 
 import Utils.Containers.Internal.Prelude hiding
   (filter,foldl,foldl',foldr,null,map,take,drop,splitAt)
 import Prelude ()
-import Control.Applicative (Const(..))
+import Control.Applicative (Const(..), liftA3)
 import qualified Data.List as List
 import Data.Semigroup (Semigroup(..), stimesIdempotentMonoid, stimesIdempotent)
 import Data.Functor.Classes
-import Data.Functor.Identity (Identity)
+import Data.Functor.Identity (Identity(..))
 import qualified Data.Foldable as Foldable
 import Control.DeepSeq (NFData(rnf),NFData1(liftRnf))
 import Data.List.NonEmpty (NonEmpty(..))
@@ -859,7 +879,7 @@ difference t1 Tip  = t1
 difference t1 (Bin _ x l2 r2) = case split x t1 of
    (l1, r1)
      | size l1l2 + size r1r2 == size t1 -> t1
-     | otherwise -> merge l1l2 r1r2
+     | otherwise -> link2 l1l2 r1r2
      where !l1l2 = difference l1 l2
            !r1r2 = difference r1 r2
 #if __GLASGOW_HASKELL__
@@ -887,7 +907,7 @@ intersection t1@(Bin _ x l1 r1) t2
   | b = if l1l2 `ptrEq` l1 && r1r2 `ptrEq` r1
         then t1
         else link x l1l2 r1r2
-  | otherwise = merge l1l2 r1r2
+  | otherwise = link2 l1l2 r1r2
   where
     !(l2, b, r2) = splitMember x t2
     !l1l2 = intersection l1 l2
@@ -951,7 +971,7 @@ symmetricDifference :: Ord a => Set a -> Set a -> Set a
 symmetricDifference Tip t2 = t2
 symmetricDifference t1 Tip = t1
 symmetricDifference (Bin _ x l1 r1) t2
-  | found = merge l1l2 r1r2
+  | found = link2 l1l2 r1r2
   | otherwise = link x l1l2 r1r2
   where
     !(l2, found, r2) = splitMember x t2
@@ -971,7 +991,7 @@ filter p t@(Bin _ x l r)
     | p x = if l `ptrEq` l' && r `ptrEq` r'
             then t
             else link x l' r'
-    | otherwise = merge l' r'
+    | otherwise = link2 l' r'
     where
       !l' = filter p l
       !r' = filter p r
@@ -987,8 +1007,8 @@ partition p0 t0 = toPair $ go p0 t0
       ((l1 :*: l2), (r1 :*: r2))
         | p x       -> (if l1 `ptrEq` l && r1 `ptrEq` r
                         then t
-                        else link x l1 r1) :*: merge l2 r2
-        | otherwise -> merge l1 r1 :*:
+                        else link x l1 r1) :*: link2 l2 r2
+        | otherwise -> link2 l1 r1 :*:
                        (if l2 `ptrEq` l && r2 `ptrEq` r
                         then t
                         else link x l2 r2)
@@ -1731,7 +1751,7 @@ finishB (BSet s) = s
   are valid:
     [glue l r]        Glues [l] and [r] together. Assumes that [l] and
                       [r] are already balanced with respect to each other.
-    [merge l r]       Merges two trees and restores balance.
+    [link2 l r]       Merges two trees and restores balance.
 --------------------------------------------------------------------}
 
 {--------------------------------------------------------------------
@@ -1788,12 +1808,12 @@ insertMin x t
           -> balanceL y (insertMin x l) r
 
 {--------------------------------------------------------------------
-  [merge l r]: merges two trees.
+  [link2 l r]: merges two trees.
 --------------------------------------------------------------------}
-merge :: Set a -> Set a -> Set a
-merge Tip r   = r
-merge l Tip   = l
-merge l@(Bin lsz lx ll lr) r@(Bin rsz rx rl rr)
+link2 :: Set a -> Set a -> Set a
+link2 Tip r   = r
+link2 l Tip   = l
+link2 l@(Bin lsz lx ll lr) r@(Bin rsz rx rl rr)
   | delta*lsz < rsz = balanceL rx (mergeR_ lsz l rl) rr
   | delta*rsz < lsz = balanceR lx ll (mergeL_ lr rsz r)
   | otherwise = glue l r
@@ -2151,7 +2171,7 @@ cartesianProduct as bs =
 newtype MergeSet a = MergeSet { getMergeSet :: Set a }
 
 instance Semigroup (MergeSet a) where
-  MergeSet xs <> MergeSet ys = MergeSet (merge xs ys)
+  MergeSet xs <> MergeSet ys = MergeSet (link2 xs ys)
 
 instance Monoid (MergeSet a) where
   mempty = MergeSet empty
@@ -2172,7 +2192,316 @@ instance Monoid (MergeSet a) where
 --
 -- @since 0.5.11
 disjointUnion :: Set a -> Set b -> Set (Either a b)
-disjointUnion as bs = merge (mapMonotonic Left as) (mapMonotonic Right bs)
+disjointUnion as bs = link2 (mapMonotonic Left as) (mapMonotonic Right bs)
+
+{--------------------------------------------------------------------
+  Merging Sets
+--------------------------------------------------------------------}
+
+-- | A tactic for dealing with elements present in one set but not the other in
+-- 'merge' or 'mergeA'.
+--
+-- A tactic of type @WhenMissing f a@ is an abstract representation of a
+-- function of type @a -> f Bool@.
+--
+-- @since FIXME
+
+data WhenMissing f a = WhenMissing
+  { missingSubtree :: Set a -> f (Set a)
+  , missingElem :: a -> f Bool }
+
+-- | A tactic for dealing with elements present in one set but not the other in
+-- 'merge'.
+--
+-- A tactic of type @SimpleWhenMissing a@ is an abstract representation
+-- of a function of type @a -> Bool@.
+--
+-- @since FIXME
+type SimpleWhenMissing = WhenMissing Identity
+
+-- | A tactic for dealing with elements present in both sets in 'merge' or
+-- 'mergeA'.
+--
+-- A tactic of type @WhenMatched f a@ is an abstract representation of a
+-- function of type @a -> f Bool@.
+--
+-- @since FIXME
+newtype WhenMatched f a = WhenMatched
+  { matchedElem :: a -> f Bool }
+
+-- | A tactic for dealing with elements present in both sets in 'merge'.
+--
+-- A tactic of type @SimpleWhenMatched a@ is an abstract representation of a
+-- function of type @a -> Bool@.
+--
+-- @since FIXME
+type SimpleWhenMatched = WhenMatched Identity
+
+-- | Along with zipWithMaybeAMatched (TODO fix), witnesses the isomorphism between
+-- @WhenMatched f a@ and @a -> f Bool@.
+--
+-- @since FIXME
+runWhenMatched :: WhenMatched f a -> a -> f Bool
+runWhenMatched = matchedElem
+{-# INLINE runWhenMatched #-}
+
+-- | Along with traverseMaybeMissing (TODO fix), witnesses the isomorphism between
+-- @WhenMissing f k x y@ and @k -> x -> f (Maybe y)@.
+--
+-- @since FIXME
+runWhenMissing :: WhenMissing f a -> a -> f Bool
+runWhenMissing = missingElem
+{-# INLINE runWhenMissing #-}
+
+-- | When an element is found in both sets, choose whether to keep the element
+-- in the merged set.
+--
+-- @since FIXME
+filterMatched :: Applicative f => (a -> Bool) -> WhenMatched f a
+filterMatched f = WhenMatched (pure . f)
+{-# INLINE filterMatched #-}
+
+-- | When an element is found in both sets, choose whether to keep the element
+-- in the merged set.
+--
+-- @since FIXME
+filterAMatched :: (a -> f Bool) -> WhenMatched f a
+filterAMatched = WhenMatched
+
+-- | Drop all the elements that are missing from the other set.
+--
+-- @
+-- dropMissing :: SimpleWhenMissing a
+-- @
+--
+-- prop> dropMissing = filterMissing (\_ -> False)
+--
+-- but @dropMissing@ is much faster.
+--
+-- @since FIXME
+dropMissing :: Applicative f => WhenMissing f a
+dropMissing = WhenMissing
+  { missingSubtree = \_ -> pure Tip
+  , missingElem = \_ -> pure False }
+{-# INLINE dropMissing #-}
+
+-- | Preserve the elements that are missing from the other set.
+--
+-- @
+-- preserveMissing :: SimpleWhenMissing a
+-- @
+--
+-- prop> preserveMissing = filterMissing (\_ -> True)
+--
+-- but @preserveMissing@ is much faster.
+--
+-- @since FIXME
+preserveMissing :: Applicative f => WhenMissing f a
+preserveMissing = WhenMissing
+  { missingSubtree = pure
+  , missingElem = \_ -> pure True }
+{-# INLINE preserveMissing #-}
+
+-- | Filter the elements that are missing from the other set.
+--
+-- @
+-- filterMissing :: (a -> Bool) -> SimpleWhenMissing k a
+-- @
+--
+-- @since FIXME
+filterMissing :: Applicative f => (a -> Bool) -> WhenMissing f a
+filterMissing f = WhenMissing
+  { missingSubtree = \s -> pure $! filter f s
+  , missingElem = \x -> pure $! f x }
+{-# INLINE filterMissing #-}
+
+-- | Filter the elements that are missing from the other set using some
+-- 'Applicative' action.
+--
+-- @since FIXME
+filterAMissing :: Applicative f => (a -> f Bool) -> WhenMissing f a
+filterAMissing f = WhenMissing
+  { missingSubtree = filterA f
+  , missingElem = f }
+{-# INLINE filterAMissing #-}
+
+filterA :: Applicative f => (a -> f Bool) -> Set a -> f (Set a)
+filterA f = go
+  where
+    go (Bin _ x l r) = liftA3 doLink (go l) (f x) (go r)
+      where
+        doLink l' False r' = link2 l' r'
+        doLink l' True r' = link x l' r'
+    go Tip = pure Tip
+{-# INLINABLE filterA #-}
+
+-- | Merge two sets.
+--
+-- 'merge' takes two 'WhenMissing' tactics, a 'WhenMatched' tactic and two sets.
+-- It uses the tactics to merge the sets.
+--
+-- TODO fix
+-- Consider
+--
+-- @
+-- merge (mapMaybeMissing g1)
+--              (mapMaybeMissing g2)
+--              (zipWithMaybeMatched f)
+--              m1 m2
+-- @
+--
+-- Take, for example,
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'), (3, \'c\'), (4, \'d\')]
+-- m2 = [(1, "one"), (2, "two"), (4, "three")]
+-- @
+--
+-- 'merge' will first \"align\" these maps by key:
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'),               (3, \'c\'), (4, \'d\')]
+-- m2 =           [(1, "one"), (2, "two"),           (4, "three")]
+-- @
+--
+-- It will then pass the individual entries and pairs of entries
+-- to @g1@, @g2@, or @f@ as appropriate:
+--
+-- @
+-- maybes = [g1 0 \'a\', f 1 \'b\' "one", g2 2 "two", g1 3 \'c\', f 4 \'d\' "three"]
+-- @
+--
+-- This produces a 'Maybe' for each key:
+--
+-- @
+-- keys =     0        1          2           3        4
+-- results = [Nothing, Just True, Just False, Nothing, Just True]
+-- @
+--
+-- Finally, the @Just@ results are collected into a map:
+--
+-- @
+-- return value = [(1, True), (2, False), (4, True)]
+-- @
+--
+-- The other tactics below are optimizations or simplifications of
+-- 'mapMaybeMissing' for special cases. Most importantly,
+--
+-- * 'dropMissing' drops all the keys.
+-- * 'preserveMissing' leaves all the entries alone.
+--
+-- When 'merge' is given three arguments, it is inlined at the call
+-- site. To prevent excessive inlining, you should typically use 'merge'
+-- to define your custom combining functions.
+--
+--
+-- Examples:
+--
+-- prop> unionWithKey f = merge preserveMissing preserveMissing (zipWithMatched f)
+-- prop> intersectionWithKey f = merge dropMissing dropMissing (zipWithMatched f)
+-- prop> differenceWith f = merge preserveMissing dropMissing (zipWithMatched f)
+-- prop> symmetricDifference = merge preserveMissing preserveMissing (zipWithMaybeMatched $ \ _ _ _ -> Nothing)
+-- prop> mapEachPiece f g h = merge (mapMissing f) (mapMissing g) (zipWithMatched h)
+--
+-- @since FIXME
+merge
+  :: Ord a
+  => SimpleWhenMissing a -- ^ What to do with keys in @s1@ but not @s2@
+  -> SimpleWhenMissing a -- ^ What to do with keys in @s2@ but not @s1@
+  -> SimpleWhenMatched a -- ^ What to do with keys in both @s1@ and @s2@
+  -> Set a -- ^ Set @s1@
+  -> Set a -- ^ Set @s2@
+  -> Set a
+merge g1 g2 f s1 s2 = runIdentity (mergeA g1 g2 f s1 s2)
+{-# INLINE merge #-}
+
+-- | An applicative version of 'merge'.
+--
+-- 'mergeA' takes two 'WhenMissing' tactics, a 'WhenMatched' tactic and two
+-- maps. It uses the tactics to merge the maps.
+--
+-- TODO fix
+-- Consider
+--
+-- @
+-- mergeA (traverseMaybeMissing g1)
+--               (traverseMaybeMissing g2)
+--               (zipWithMaybeAMatched f)
+--               m1 m2
+-- @
+--
+-- Take, for example,
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'), (3, \'c\'), (4, \'d\')]
+-- m2 = [(1, "one"), (2, "two"), (4, "three")]
+-- @
+--
+-- @mergeA@ will first \"align\" these maps by key:
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'),               (3, \'c\'), (4, \'d\')]
+-- m2 =           [(1, "one"), (2, "two"),           (4, "three")]
+-- @
+--
+-- It will then pass the individual entries and pairs of entries
+-- to @g1@, @g2@, or @f@ as appropriate:
+--
+-- @
+-- actions = [g1 0 \'a\', f 1 \'b\' "one", g2 2 "two", g1 3 \'c\', f 4 \'d\' "three"]
+-- @
+--
+-- Next, it will perform the actions in the @actions@ list in order from
+-- left to right.
+--
+-- @
+-- keys =     0        1          2           3        4
+-- results = [Nothing, Just True, Just False, Nothing, Just True]
+-- @
+--
+-- Finally, the @Just@ results are collected into a map:
+--
+-- @
+-- return value = [(1, True), (2, False), (4, True)]
+-- @
+--
+-- The other tactics below are optimizations or simplifications of
+-- 'traverseMaybeMissing' for special cases. Most importantly,
+--
+-- * 'dropMissing' drops all the keys.
+-- * 'preserveMissing' leaves all the entries alone.
+-- * 'mapMaybeMissing' does not use the 'Applicative' context.
+--
+-- When 'mergeA' is given three arguments, it is inlined at the call
+-- site. To prevent excessive inlining, you should generally only use
+-- 'mergeA' to define custom combining functions.
+--
+-- @since 0.5.9
+mergeA
+  :: (Applicative f, Ord a)
+  => WhenMissing f a -- ^ What to do with elements in @s1@ but not @s2@
+  -> WhenMissing f a -- ^ What to do with elements in @s2@ but not @s1@
+  -> WhenMatched f a -- ^ What to do with elements in both @s1@ and @s2@
+  -> Set a -- ^ Set @s1@
+  -> Set a -- ^ Set @s2@
+  -> f (Set a)
+mergeA
+    WhenMissing{missingSubtree = g1t, missingElem = g1k}
+    WhenMissing{missingSubtree = g2t}
+    (WhenMatched f) = go
+  where
+    go t1 Tip = g1t t1
+    go Tip t2 = g2t t2
+    go (Bin _ x1 l1 r1) t2 = case splitMember x1 t2 of
+      (l2, found, r2)
+        | found -> liftA3 doLink l1l2 (f x1) r1r2
+        | otherwise -> liftA3 doLink l1l2 (g1k x1) r1r2
+        where
+          doLink l' True r' = link x1 l' r'
+          doLink l' False r' = link2 l' r'
+          l1l2 = go l1 l2
+          r1r2 = go r1 r2
+{-# INLINE mergeA #-}
 
 {--------------------------------------------------------------------
   Debugging

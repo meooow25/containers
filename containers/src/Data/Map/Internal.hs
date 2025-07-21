@@ -2225,6 +2225,10 @@ compose bc !ab
   | null bc = empty
   | otherwise = mapMaybe (bc !?) ab
 
+{--------------------------------------------------------------------
+  Merging Maps
+--------------------------------------------------------------------}
+
 -- | A tactic for dealing with keys present in one map but not the other in
 -- 'merge' or 'mergeA'.
 --

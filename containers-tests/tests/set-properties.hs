@@ -4,7 +4,7 @@ import Data.List (nub, sort, sortBy)
 import qualified Data.List as List
 import Data.Maybe
 import Data.Set
-import Data.Set.Internal (link, merge)
+import Data.Set.Internal (link, link2)
 import Prelude hiding (lookup, null, map, filter, foldr, foldl, foldl', all, take, drop, splitAt)
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -391,7 +391,7 @@ prop_Link x = forValidUnitTree $ \t ->
 prop_Merge :: Int -> Property
 prop_Merge x = forValidUnitTree $ \t ->
     let (l,r) = split x t
-    in valid (merge l r)
+    in valid (link2 l r)
 
 {--------------------------------------------------------------------
   Union
