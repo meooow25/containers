@@ -109,6 +109,7 @@ library
     Data.Sequence.Internal.Sorting
     Data.Set
     Data.Set.Internal
+    Data.Set.Merge
     Data.Tree
     Utils.Containers.Internal.BitQueue
     Utils.Containers.Internal.BitUtil
@@ -364,6 +365,7 @@ test-suite set-properties
 
   other-modules:
     Utils.ArbitrarySetMap
+    Utils.SetMerge
 
   ghc-options:      -O2
   other-extensions:

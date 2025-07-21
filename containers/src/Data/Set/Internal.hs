@@ -222,23 +222,19 @@ module Data.Set.Internal (
             , valid
 
             -- * General combining function
-            --
-            -- ** Simple combining function
+            , WhenMissing
             , SimpleWhenMissing
             , dropMissing
             , preserveMissing
             , filterMissing
+            , filterAMissing
+            , runWhenMissing
+            , WhenMatched
             , SimpleWhenMatched
             , filterMatched
-            , merge
-
-            -- ** Applicative combining function
-            , WhenMissing
-            , runWhenMissing
-            , filterAMissing
-            , WhenMatched
-            , runWhenMatched
             , filterAMatched
+            , runWhenMatched
+            , merge
             , mergeA
 
             -- Internals (for testing)
@@ -1814,21 +1810,21 @@ link2 :: Set a -> Set a -> Set a
 link2 Tip r   = r
 link2 l Tip   = l
 link2 l@(Bin lsz lx ll lr) r@(Bin rsz rx rl rr)
-  | delta*lsz < rsz = balanceL rx (mergeR_ lsz l rl) rr
-  | delta*rsz < lsz = balanceR lx ll (mergeL_ lr rsz r)
+  | delta*lsz < rsz = balanceL rx (link2R_ lsz l rl) rr
+  | delta*rsz < lsz = balanceR lx ll (link2L_ lr rsz r)
   | otherwise = glue l r
 
-mergeL_ :: Set a -> Int -> Set a -> Set a
-mergeL_ l !rsz r = case l of
+link2L_ :: Set a -> Int -> Set a -> Set a
+link2L_ l !rsz r = case l of
   Bin lsz lx ll lr
-    | delta*rsz < lsz -> balanceR lx ll (mergeL_ lr rsz r)
+    | delta*rsz < lsz -> balanceR lx ll (link2L_ lr rsz r)
     | otherwise -> glue l r
   Tip -> r
 
-mergeR_ :: Int -> Set a -> Set a -> Set a
-mergeR_ !lsz l r = case r of
+link2R_ :: Int -> Set a -> Set a -> Set a
+link2R_ !lsz l r = case r of
   Bin rsz rx rl rr
-    | delta*lsz < rsz -> balanceL rx (mergeR_ lsz l rl) rr
+    | delta*lsz < rsz -> balanceL rx (link2R_ lsz l rl) rr
     | otherwise -> glue l r
   Tip -> l
 
@@ -2219,6 +2215,14 @@ data WhenMissing f a = WhenMissing
 -- @since FIXME
 type SimpleWhenMissing = WhenMissing Identity
 
+-- | Along with traverseMaybeMissing (TODO fix), witnesses the isomorphism between
+-- @WhenMissing f k x y@ and @k -> x -> f (Maybe y)@.
+--
+-- @since FIXME
+runWhenMissing :: WhenMissing f a -> a -> f Bool
+runWhenMissing = missingElem
+{-# INLINE runWhenMissing #-}
+
 -- | A tactic for dealing with elements present in both sets in 'merge' or
 -- 'mergeA'.
 --
@@ -2227,7 +2231,7 @@ type SimpleWhenMissing = WhenMissing Identity
 --
 -- @since FIXME
 newtype WhenMatched f a = WhenMatched
-  { matchedElem :: a -> f Bool }
+  { matchedKey :: a -> f Bool }
 
 -- | A tactic for dealing with elements present in both sets in 'merge'.
 --
@@ -2242,16 +2246,8 @@ type SimpleWhenMatched = WhenMatched Identity
 --
 -- @since FIXME
 runWhenMatched :: WhenMatched f a -> a -> f Bool
-runWhenMatched = matchedElem
+runWhenMatched = matchedKey
 {-# INLINE runWhenMatched #-}
-
--- | Along with traverseMaybeMissing (TODO fix), witnesses the isomorphism between
--- @WhenMissing f k x y@ and @k -> x -> f (Maybe y)@.
---
--- @since FIXME
-runWhenMissing :: WhenMissing f a -> a -> f Bool
-runWhenMissing = missingElem
-{-# INLINE runWhenMissing #-}
 
 -- | When an element is found in both sets, choose whether to keep the element
 -- in the merged set.
@@ -2340,75 +2336,57 @@ filterA f = go
 -- 'merge' takes two 'WhenMissing' tactics, a 'WhenMatched' tactic and two sets.
 -- It uses the tactics to merge the sets.
 --
--- TODO fix
 -- Consider
 --
 -- @
--- merge (mapMaybeMissing g1)
---              (mapMaybeMissing g2)
---              (zipWithMaybeMatched f)
---              m1 m2
+-- merge (filterMissing g1) (filterMissing g2) (filterMatched f) s1 s2
 -- @
 --
 -- Take, for example,
 --
 -- @
--- m1 = [(0, \'a\'), (1, \'b\'), (3, \'c\'), (4, \'d\')]
--- m2 = [(1, "one"), (2, "two"), (4, "three")]
+-- s1 = [2, 4, 6, 8, 10, 12]
+-- s2 = [3, 6, 9, 12]
 -- @
 --
--- 'merge' will first \"align\" these maps by key:
+-- 'merge' will first \"align\" these sets:
 --
 -- @
--- m1 = [(0, \'a\'), (1, \'b\'),               (3, \'c\'), (4, \'d\')]
--- m2 =           [(1, "one"), (2, "two"),           (4, "three")]
+-- m1 = [2,    4, 6, 8,    10, 12]
+-- m2 = [   3,    6,    9,     12]
 -- @
 --
--- It will then pass the individual entries and pairs of entries
--- to @g1@, @g2@, or @f@ as appropriate:
+-- It will then pass the elements to @g1@, @g2@, or @f@ as appropriate,
+-- producing a @Bool@ for each key.
 --
 -- @
--- maybes = [g1 0 \'a\', f 1 \'b\' "one", g2 2 "two", g1 3 \'c\', f 4 \'d\' "three"]
+-- keys:       2     3,    4,   6,    8,    9,    10,   12
+-- result: [g1 2, g2 3, g1 4, f 6, g1 8, g2 9, g1 10, f 12]
 -- @
 --
--- This produces a 'Maybe' for each key:
---
--- @
--- keys =     0        1          2           3        4
--- results = [Nothing, Just True, Just False, Nothing, Just True]
--- @
---
--- Finally, the @Just@ results are collected into a map:
+-- TODO fix
+-- The keys for which the results are @True@ are collected into a set:
 --
 -- @
 -- return value = [(1, True), (2, False), (4, True)]
 -- @
 --
 -- The other tactics below are optimizations or simplifications of
--- 'mapMaybeMissing' for special cases. Most importantly,
+-- 'filterMissing' for special cases. Most importantly,
 --
--- * 'dropMissing' drops all the keys.
--- * 'preserveMissing' leaves all the entries alone.
+-- * 'dropMissing' drops all elements.
+-- * 'preserveMissing' leaves all elements alone.
 --
 -- When 'merge' is given three arguments, it is inlined at the call
 -- site. To prevent excessive inlining, you should typically use 'merge'
 -- to define your custom combining functions.
 --
---
--- Examples:
---
--- prop> unionWithKey f = merge preserveMissing preserveMissing (zipWithMatched f)
--- prop> intersectionWithKey f = merge dropMissing dropMissing (zipWithMatched f)
--- prop> differenceWith f = merge preserveMissing dropMissing (zipWithMatched f)
--- prop> symmetricDifference = merge preserveMissing preserveMissing (zipWithMaybeMatched $ \ _ _ _ -> Nothing)
--- prop> mapEachPiece f g h = merge (mapMissing f) (mapMissing g) (zipWithMatched h)
---
 -- @since FIXME
 merge
   :: Ord a
-  => SimpleWhenMissing a -- ^ What to do with keys in @s1@ but not @s2@
-  -> SimpleWhenMissing a -- ^ What to do with keys in @s2@ but not @s1@
-  -> SimpleWhenMatched a -- ^ What to do with keys in both @s1@ and @s2@
+  => SimpleWhenMissing a -- ^ What to do with elements in @s1@ but not @s2@
+  -> SimpleWhenMissing a -- ^ What to do with elements in @s2@ but not @s1@
+  -> SimpleWhenMatched a -- ^ What to do with elements in both @s1@ and @s2@
   -> Set a -- ^ Set @s1@
   -> Set a -- ^ Set @s2@
   -> Set a
@@ -2476,7 +2454,7 @@ merge g1 g2 f s1 s2 = runIdentity (mergeA g1 g2 f s1 s2)
 -- site. To prevent excessive inlining, you should generally only use
 -- 'mergeA' to define custom combining functions.
 --
--- @since 0.5.9
+-- @since FIXME
 mergeA
   :: (Applicative f, Ord a)
   => WhenMissing f a -- ^ What to do with elements in @s1@ but not @s2@

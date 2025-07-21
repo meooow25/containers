@@ -177,6 +177,22 @@ module Data.IntSet.Internal (
     , fromAscList
     , fromDistinctAscList
 
+    -- * General combining function
+    , WhenMissing
+    , SimpleWhenMissing
+    , dropMissing
+    , preserveMissing
+    , filterMissing
+    , filterAMissing
+    , runWhenMissing
+    , WhenMatched
+    , SimpleWhenMatched
+    , filterMatched
+    , filterAMatched
+    , runWhenMatched
+    , merge
+    , mergeA
+
     -- * Debugging
     , showTree
     , showTreeWith
@@ -2132,3 +2148,378 @@ splitRoot x@(Tip _ _) = [x]
 splitRoot (Bin p l r) | signBranch p = [r, l]
                       | otherwise = [l, r]
 {-# INLINE splitRoot #-}
+
+{--------------------------------------------------------------------
+  Merging IntSets
+--------------------------------------------------------------------}
+
+-- | A tactic for dealing with elements present in one set but not the other in
+-- 'merge' or 'mergeA'.
+--
+-- A tactic of type @WhenMissing f@ is an abstract representation of a
+-- function of type @Key -> f Bool@.
+--
+-- @since FIXME
+
+data WhenMissing f = WhenMissing
+  { missingSubtree :: IntSet -> f IntSet
+  , missingTip :: Int -> BitMap -> f BitMap }
+
+-- | A tactic for dealing with elements present in one set but not the other in
+-- 'merge'.
+--
+-- A tactic of type @SimpleWhenMissing@ is an abstract representation
+-- of a function of type @Key -> Bool@.
+--
+-- @since FIXME
+type SimpleWhenMissing = WhenMissing Identity
+
+-- | Along with traverseMaybeMissing (TODO fix), witnesses the isomorphism between
+-- @WhenMissing f k x y@ and @k -> x -> f (Maybe y)@.
+--
+-- @since FIXME
+runWhenMissing :: Functor f => WhenMissing f -> Key -> f Bool
+runWhenMissing wm x = fmap (/=0) (missingTip wm (prefixOf x) (bitmapOf x))
+{-# INLINE runWhenMissing #-}
+
+-- | A tactic for dealing with elements present in both sets in 'merge' or
+-- 'mergeA'.
+--
+-- A tactic of type @WhenMatched f@ is an abstract representation of a
+-- function of type @Key -> f Bool@.
+--
+-- @since FIXME
+newtype WhenMatched f = WhenMatched
+  { matchedTip :: Int -> BitMap -> f BitMap }
+
+-- | A tactic for dealing with elements present in both sets in 'merge'.
+--
+-- A tactic of type @SimpleWhenMatched@ is an abstract representation of a
+-- function of type @Key -> Bool@.
+--
+-- @since FIXME
+type SimpleWhenMatched = WhenMatched Identity
+
+-- | Along with zipWithMaybeAMatched (TODO fix), witnesses the isomorphism between
+-- @WhenMatched f@ and @Key -> f Bool@.
+--
+-- @since FIXME
+runWhenMatched :: Functor f => WhenMatched f -> Key -> f Bool
+runWhenMatched wm x = fmap (/=0) (matchedTip wm (prefixOf x) (bitmapOf x))
+{-# INLINE runWhenMatched #-}
+
+-- | When an element is found in both sets, choose whether to keep the element
+-- in the merged set.
+--
+-- @since FIXME
+filterMatched :: Applicative f => (Key -> Bool) -> WhenMatched f
+filterMatched f = WhenMatched (\kx bm -> pure $! filterBits f kx bm)
+{-# INLINE filterMatched #-}
+
+-- TODO GHC?
+filterBits :: (Key -> Bool) -> Int -> BitMap -> BitMap
+filterBits f !kx = foldl'Bits 0 g 0
+  where
+    g acc bi
+      | f (kx .|. bi) = acc .|. bitmapOfSuffix bi
+      | otherwise = acc
+{-# INLINE filterBits #-}
+
+-- TODO GHC?
+filterABits :: Applicative f => (Key -> f Bool) -> Int -> BitMap -> f BitMap
+filterABits f kx = go
+  where
+    go bm
+      | bm' == 0 = fmap (\b -> if b then bitmapOfSuffix bi else 0) (f x)
+      | otherwise = liftA2 (\b bm'' -> if b
+                                       then bm'' .|. bitmapOfSuffix bi
+                                       else bm'')
+                           (f x)
+                           (go bm')
+      where
+        bi = countTrailingZeros bm
+        !x = kx .|. bi
+        bm' = bm .&. (bm-1)
+{-# INLINE filterABits #-}
+
+-- | When an element is found in both sets, choose whether to keep the element
+-- in the merged set.
+--
+-- @since FIXME
+filterAMatched :: Applicative f => (Key -> f Bool) -> WhenMatched f
+filterAMatched = WhenMatched . filterABits
+
+-- | Drop all the elements that are missing from the other set.
+--
+-- @
+-- dropMissing :: SimpleWhenMissing a
+-- @
+--
+-- prop> dropMissing = filterMissing (\_ -> False)
+--
+-- but @dropMissing@ is much faster.
+--
+-- @since FIXME
+dropMissing :: Applicative f => WhenMissing f
+dropMissing = WhenMissing
+  { missingSubtree = \_ -> pure Nil
+  , missingTip = \_ _ -> pure 0 }
+{-# INLINE dropMissing #-}
+
+-- | Preserve the elements that are missing from the other set.
+--
+-- @
+-- preserveMissing :: SimpleWhenMissing a
+-- @
+--
+-- prop> preserveMissing = filterMissing (\_ -> True)
+--
+-- but @preserveMissing@ is much faster.
+--
+-- @since FIXME
+preserveMissing :: Applicative f => WhenMissing f
+preserveMissing = WhenMissing
+  { missingSubtree = pure
+  , missingTip = \_ bm -> pure bm }
+{-# INLINE preserveMissing #-}
+
+-- | Filter the elements that are missing from the other set.
+--
+-- @
+-- filterMissing :: (Key -> Bool) -> SimpleWhenMissing k a
+-- @
+--
+-- @since FIXME
+filterMissing :: Applicative f => (Key -> Bool) -> WhenMissing f
+filterMissing f = WhenMissing
+  { missingSubtree = \s -> pure $! filter f s
+  , missingTip = \kx bm -> pure $! filterBits f kx bm }
+{-# INLINE filterMissing #-}
+
+-- | Filter the elements that are missing from the other set using some
+-- 'Applicative' action.
+--
+-- @since FIXME
+filterAMissing :: Applicative f => (Key -> f Bool) -> WhenMissing f
+filterAMissing f = WhenMissing
+  { missingSubtree = filterA f
+  , missingTip = filterABits f }
+{-# INLINE filterAMissing #-}
+
+filterA :: Applicative f => (Key -> f Bool) -> IntSet -> f IntSet
+filterA f t = case t of
+  Bin p l r
+    | signBranch p -> liftA2 (flip (bin p)) (go r) (go l)
+    | otherwise -> liftA2 (bin p) (go l) (go r)
+  _ -> go t
+  where
+    go (Bin p l r) = liftA2 (bin p) (go l) (go r)
+    go (Tip kx bm) = fmap (tip kx) (filterABits f kx bm)
+    go Nil = pure Nil
+{-# INLINABLE filterA #-}
+
+-- | Merge two sets.
+--
+-- 'merge' takes two 'WhenMissing' tactics, a 'WhenMatched' tactic and two sets.
+-- It uses the tactics to merge the sets.
+--
+-- Consider
+--
+-- @
+-- merge (filterMissing g1) (filterMissing g2) (filterMatched f) s1 s2
+-- @
+--
+-- Take, for example,
+--
+-- @
+-- s1 = [2, 4, 6, 8, 10, 12]
+-- s2 = [3, 6, 9, 12]
+-- @
+--
+-- 'merge' will first \"align\" these sets:
+--
+-- @
+-- m1 = [2,    4, 6, 8,    10, 12]
+-- m2 = [   3,    6,    9,     12]
+-- @
+--
+-- It will then pass the elements to @g1@, @g2@, or @f@ as appropriate,
+-- producing a @Bool@ for each key.
+--
+-- @
+-- keys:       2     3,    4,   6,    8,    9,    10,   12
+-- result: [g1 2, g2 3, g1 4, f 6, g1 8, g2 9, g1 10, f 12]
+-- @
+--
+-- TODO fix
+-- The keys for which the results are @True@ are collected into a set:
+--
+-- @
+-- return value = [(1, True), (2, False), (4, True)]
+-- @
+--
+-- The other tactics below are optimizations or simplifications of
+-- 'filterMissing' for special cases. Most importantly,
+--
+-- * 'dropMissing' drops all elements.
+-- * 'preserveMissing' leaves all elements alone.
+--
+-- When 'merge' is given three arguments, it is inlined at the call
+-- site. To prevent excessive inlining, you should typically use 'merge'
+-- to define your custom combining functions.
+--
+-- @since FIXME
+merge
+  :: SimpleWhenMissing -- ^ What to do with elements in @s1@ but not @s2@
+  -> SimpleWhenMissing -- ^ What to do with elements in @s2@ but not @s1@
+  -> SimpleWhenMatched -- ^ What to do with elements in both @s1@ and @s2@
+  -> IntSet -- ^ Set @s1@
+  -> IntSet -- ^ Set @s2@
+  -> IntSet
+merge g1 g2 f s1 s2 = runIdentity (mergeA g1 g2 f s1 s2)
+{-# INLINE merge #-}
+
+-- | An applicative version of 'merge'.
+--
+-- 'mergeA' takes two 'WhenMissing' tactics, a 'WhenMatched' tactic and two
+-- maps. It uses the tactics to merge the maps.
+--
+-- TODO fix
+-- Consider
+--
+-- @
+-- mergeA (traverseMaybeMissing g1)
+--               (traverseMaybeMissing g2)
+--               (zipWithMaybeAMatched f)
+--               m1 m2
+-- @
+--
+-- Take, for example,
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'), (3, \'c\'), (4, \'d\')]
+-- m2 = [(1, "one"), (2, "two"), (4, "three")]
+-- @
+--
+-- @mergeA@ will first \"align\" these maps by key:
+--
+-- @
+-- m1 = [(0, \'a\'), (1, \'b\'),               (3, \'c\'), (4, \'d\')]
+-- m2 =           [(1, "one"), (2, "two"),           (4, "three")]
+-- @
+--
+-- It will then pass the individual entries and pairs of entries
+-- to @g1@, @g2@, or @f@ as appropriate:
+--
+-- @
+-- actions = [g1 0 \'a\', f 1 \'b\' "one", g2 2 "two", g1 3 \'c\', f 4 \'d\' "three"]
+-- @
+--
+-- Next, it will perform the actions in the @actions@ list in order from
+-- left to right.
+--
+-- @
+-- keys =     0        1          2           3        4
+-- results = [Nothing, Just True, Just False, Nothing, Just True]
+-- @
+--
+-- Finally, the @Just@ results are collected into a map:
+--
+-- @
+-- return value = [(1, True), (2, False), (4, True)]
+-- @
+--
+-- The other tactics below are optimizations or simplifications of
+-- 'traverseMaybeMissing' for special cases. Most importantly,
+--
+-- * 'dropMissing' drops all the keys.
+-- * 'preserveMissing' leaves all the entries alone.
+-- * 'mapMaybeMissing' does not use the 'Applicative' context.
+--
+-- When 'mergeA' is given three arguments, it is inlined at the call
+-- site. To prevent excessive inlining, you should generally only use
+-- 'mergeA' to define custom combining functions.
+--
+-- @since FIXME
+mergeA
+  :: Applicative f
+  => WhenMissing f -- ^ What to do with elements in @s1@ but not @s2@
+  -> WhenMissing f -- ^ What to do with elements in @s2@ but not @s1@
+  -> WhenMatched f -- ^ What to do with elements in both @s1@ and @s2@
+  -> IntSet -- ^ Set @s1@
+  -> IntSet -- ^ Set @s2@
+  -> f IntSet
+mergeA = undefined
+  --   WhenMissing{missingSubtree = g1t, missingKey = g1k}
+  --   WhenMissing{missingSubtree = g2t, missingKey = g2k}
+  --   (WhenMatched f) = go
+  -- where
+
+  --   go t1  Nil = g1t t1
+  --   go Nil t2  = g2t t2
+
+  --   -- This case is already covered below.
+  --   -- go (Tip k1 x1) (Tip k2 x2) = mergeTips k1 x1 k2 x2
+
+  --   go (Tip k1 bm1) t2' = merge2 t2'
+  --     where
+  --       merge2 t2@(Bin p2 l2 r2)
+  --         | nomatch k1 p2 = linkA k1 (subsingletonBy g1k k1 x1) (unPrefix p2) (g2t t2)
+  --         | left k1 p2    = binA p2 (merge2 l2) (g2t r2)
+  --         | otherwise     = binA p2 (g2t l2) (merge2 r2)
+  --       merge2 (Tip k2 x2)   = mergeTips k1 x1 k2 x2
+  --       merge2 Nil           = subsingletonBy g1k k1 x1
+
+  --   go t1' (Tip k2 x2) = merge1 t1'
+  --     where
+  --       merge1 t1@(Bin p1 l1 r1)
+  --         | nomatch k2 p1 = linkA (unPrefix p1) (g1t t1) k2 (subsingletonBy g2k k2 x2)
+  --         | left k2 p1    = binA p1 (merge1 l1) (g1t r1)
+  --         | otherwise     = binA p1 (g1t l1) (merge1 r1)
+  --       merge1 (Tip k1 x1)   = mergeTips k1 x1 k2 x2
+  --       merge1 Nil           = subsingletonBy g2k k2 x2
+
+  --   go t1@(Bin p1 l1 r1) t2@(Bin p2 l2 r2) = case treeTreeBranch p1 p2 of
+  --     ABL -> binA p1 (go l1 t2) (g1t r1)
+  --     ABR -> binA p1 (g1t l1) (go r1 t2)
+  --     BAL -> binA p2 (go t1 l2) (g2t r2)
+  --     BAR -> binA p2 (g2t l2) (go t1 r2)
+  --     EQL -> binA p1 (go l1 l2) (go r1 r2)
+  --     NOM -> linkA (unPrefix p1) (g1t t1) (unPrefix p2) (g2t t2)
+
+  --   subsingletonBy :: Functor f => (Key -> a -> f (Maybe c)) -> Key -> a -> f (IntMap c)
+  --   subsingletonBy gk k x = maybe Nil (Tip k) <$> gk k x
+  --   {-# INLINE subsingletonBy #-}
+
+  --   mergeTips k1 x1 k2 x2
+  --     | k1 == k2  = maybe Nil (Tip k1) <$> f k1 x1 x2
+  --     | k1 <  k2  = liftA2 (subdoubleton k1 k2) (g1k k1 x1) (g2k k2 x2)
+  --       {-
+  --       = link_ k1 k2 <$> subsingletonBy g1k k1 x1 <*> subsingletonBy g2k k2 x2
+  --       -}
+  --     | otherwise = liftA2 (subdoubleton k2 k1) (g2k k2 x2) (g1k k1 x1)
+  --   {-# INLINE mergeTips #-}
+
+  --   subdoubleton _ _   Nothing Nothing     = Nil
+  --   subdoubleton _ k2  Nothing (Just y2)   = Tip k2 y2
+  --   subdoubleton k1 _  (Just y1) Nothing   = Tip k1 y1
+  --   subdoubleton k1 k2 (Just y1) (Just y2) = link k1 (Tip k1 y1) k2 (Tip k2 y2)
+  --   {-# INLINE subdoubleton #-}
+
+  --   -- | A variant of 'link_' which makes sure to execute side-effects
+  --   -- in the right order.
+  --   linkA k1 t1 k2 t2
+  --     | i2w k1 < i2w k2 = binA p t1 t2
+  --     | otherwise = binA p t2 t1
+  --     where
+  --       p = branchPrefix k1 k2
+  --   {-# INLINE linkA #-}
+
+  --   -- A variant of 'bin' that ensures that effects for negative keys are
+  --   -- executed first.
+  --   binA p a b
+  --     | signBranch p = liftA2 (flip (bin p)) b a
+  --     | otherwise = liftA2 (bin p) a b
+  --   {-# INLINE binA #-}
+{-# INLINE mergeA #-}
+

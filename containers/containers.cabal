@@ -62,6 +62,7 @@ Library
         Data.IntSet.Internal
         Data.IntSet.Internal.IntTreeCommons
         Data.IntSet
+        Data.IntSet.Merge
         Data.Map
         Data.Map.Lazy
         Data.Map.Merge.Lazy
@@ -71,6 +72,7 @@ Library
         Data.Map.Internal
         Data.Map.Internal.Debug
         Data.Set.Internal
+        Data.Set.Merge
         Data.Set
         Data.Graph
         Data.Sequence
