@@ -2160,10 +2160,10 @@ splitRoot (Bin p l r) | signBranch p = [r, l]
 -- function of type @Key -> f Bool@.
 --
 -- @since FIXME
-
-data WhenMissing f = WhenMissing
-  { missingSubtree :: IntSet -> f IntSet
-  , missingTip :: Int -> BitMap -> f BitMap }
+data WhenMissing f
+  = DropMissing
+  | PreserveMissing
+  | FilterMissing (Key -> f Bool)
 
 -- | A tactic for dealing with elements present in one set but not the other in
 -- 'merge'.
@@ -2178,9 +2178,12 @@ type SimpleWhenMissing = WhenMissing Identity
 -- @WhenMissing f k x y@ and @k -> x -> f (Maybe y)@.
 --
 -- @since FIXME
-runWhenMissing :: Functor f => WhenMissing f -> Key -> f Bool
-runWhenMissing wm x = fmap (/=0) (missingTip wm (prefixOf x) (bitmapOf x))
-{-# INLINE runWhenMissing #-}
+runWhenMissing :: Applicative f => WhenMissing f -> Key -> f Bool
+runWhenMissing wm x = case wm of
+  DropMissing -> pure False
+  PreserveMissing -> pure True
+  FilterMissing f -> f x
+{-# INLINABLE runWhenMissing #-}
 
 -- | A tactic for dealing with elements present in both sets in 'merge' or
 -- 'mergeA'.
@@ -2189,8 +2192,10 @@ runWhenMissing wm x = fmap (/=0) (missingTip wm (prefixOf x) (bitmapOf x))
 -- function of type @Key -> f Bool@.
 --
 -- @since FIXME
-newtype WhenMatched f = WhenMatched
-  { matchedTip :: Int -> BitMap -> f BitMap }
+data WhenMatched f
+  = DropMatched
+  | PreserveMatched
+  | FilterMatched (Key -> f Bool)
 
 -- | A tactic for dealing with elements present in both sets in 'merge'.
 --
@@ -2204,17 +2209,19 @@ type SimpleWhenMatched = WhenMatched Identity
 -- @WhenMatched f@ and @Key -> f Bool@.
 --
 -- @since FIXME
-runWhenMatched :: Functor f => WhenMatched f -> Key -> f Bool
-runWhenMatched wm x = fmap (/=0) (matchedTip wm (prefixOf x) (bitmapOf x))
-{-# INLINE runWhenMatched #-}
+runWhenMatched :: Applicative f => WhenMatched f -> Key -> f Bool
+runWhenMatched wm x = case wm of
+  DropMatched -> pure False
+  PreserveMatched -> pure True
+  FilterMatched f -> f x
+{-# INLINABLE runWhenMatched #-}
 
 -- | When an element is found in both sets, choose whether to keep the element
 -- in the merged set.
 --
 -- @since FIXME
 filterMatched :: Applicative f => (Key -> Bool) -> WhenMatched f
-filterMatched f = WhenMatched (\kx bm -> pure $! filterBits f kx bm)
-{-# INLINE filterMatched #-}
+filterMatched f = FilterMatched (pure . f)
 
 -- TODO GHC?
 filterBits :: (Key -> Bool) -> Int -> BitMap -> BitMap
@@ -2246,8 +2253,8 @@ filterABits f kx = go
 -- in the merged set.
 --
 -- @since FIXME
-filterAMatched :: Applicative f => (Key -> f Bool) -> WhenMatched f
-filterAMatched = WhenMatched . filterABits
+filterAMatched :: (Key -> f Bool) -> WhenMatched f
+filterAMatched = FilterMatched
 
 -- | Drop all the elements that are missing from the other set.
 --
@@ -2260,11 +2267,8 @@ filterAMatched = WhenMatched . filterABits
 -- but @dropMissing@ is much faster.
 --
 -- @since FIXME
-dropMissing :: Applicative f => WhenMissing f
-dropMissing = WhenMissing
-  { missingSubtree = \_ -> pure Nil
-  , missingTip = \_ _ -> pure 0 }
-{-# INLINE dropMissing #-}
+dropMissing :: WhenMissing f
+dropMissing = DropMissing
 
 -- | Preserve the elements that are missing from the other set.
 --
@@ -2277,11 +2281,8 @@ dropMissing = WhenMissing
 -- but @preserveMissing@ is much faster.
 --
 -- @since FIXME
-preserveMissing :: Applicative f => WhenMissing f
-preserveMissing = WhenMissing
-  { missingSubtree = pure
-  , missingTip = \_ bm -> pure bm }
-{-# INLINE preserveMissing #-}
+preserveMissing :: WhenMissing f
+preserveMissing = PreserveMissing
 
 -- | Filter the elements that are missing from the other set.
 --
@@ -2291,20 +2292,14 @@ preserveMissing = WhenMissing
 --
 -- @since FIXME
 filterMissing :: Applicative f => (Key -> Bool) -> WhenMissing f
-filterMissing f = WhenMissing
-  { missingSubtree = \s -> pure $! filter f s
-  , missingTip = \kx bm -> pure $! filterBits f kx bm }
-{-# INLINE filterMissing #-}
+filterMissing f = FilterMissing (pure . f)
 
 -- | Filter the elements that are missing from the other set using some
 -- 'Applicative' action.
 --
 -- @since FIXME
-filterAMissing :: Applicative f => (Key -> f Bool) -> WhenMissing f
-filterAMissing f = WhenMissing
-  { missingSubtree = filterA f
-  , missingTip = filterABits f }
-{-# INLINE filterAMissing #-}
+filterAMissing :: (Key -> f Bool) -> WhenMissing f
+filterAMissing = FilterMissing
 
 filterA :: Applicative f => (Key -> f Bool) -> IntSet -> f IntSet
 filterA f t = case t of
@@ -2449,14 +2444,11 @@ mergeA
   -> IntSet -- ^ Set @s1@
   -> IntSet -- ^ Set @s2@
   -> f IntSet
-mergeA = undefined
-  --   WhenMissing{missingSubtree = g1t, missingKey = g1k}
-  --   WhenMissing{missingSubtree = g2t, missingKey = g2k}
-  --   (WhenMatched f) = go
-  -- where
+mergeA miss1 miss2 match = undefined
+  where
 
-  --   go t1  Nil = g1t t1
-  --   go Nil t2  = g2t t2
+    -- go t1  Nil = g1t t1
+    -- go Nil t2  = g2t t2
 
   --   -- This case is already covered below.
   --   -- go (Tip k1 x1) (Tip k2 x2) = mergeTips k1 x1 k2 x2
@@ -2491,14 +2483,35 @@ mergeA = undefined
   --   subsingletonBy gk k x = maybe Nil (Tip k) <$> gk k x
   --   {-# INLINE subsingletonBy #-}
 
-  --   mergeTips k1 x1 k2 x2
-  --     | k1 == k2  = maybe Nil (Tip k1) <$> f k1 x1 x2
-  --     | k1 <  k2  = liftA2 (subdoubleton k1 k2) (g1k k1 x1) (g2k k2 x2)
-  --       {-
-  --       = link_ k1 k2 <$> subsingletonBy g1k k1 x1 <*> subsingletonBy g2k k2 x2
-  --       -}
-  --     | otherwise = liftA2 (subdoubleton k2 k1) (g2k k2 x2) (g1k k1 x1)
-  --   {-# INLINE mergeTips #-}
+    mergeTips k1 bm1 k2 bm2
+      | k1 == k2 = case miss1 of
+          DropMissing -> case match of
+            DropMatched -> case miss2 of
+              DropMissing -> pure empty
+              PreserveMissing -> pure (tip k1 (bm2 .&. complement bm1))
+              FilterMissing miss2f -> undefined
+            PreserveMatched -> case miss2 of
+              DropMissing -> pure (tip k1 (bm1 .&. bm2))
+              PreserveMissing -> pure (Tip k1 bm2)
+              FilterMissing miss2f -> undefined
+            FilterMissing matchf -> undefined
+          PreserveMissing -> case match of
+            DropMatched -> case miss2 of
+              DropMissing -> pure (tip k1 (bm1 .&. complement bm2))
+              PreserveMissing -> pure (tip k1 ((bm1 .|. bm2) `xor` (bm1 .&. bm2)))
+              FilterMissing miss2f -> undefined
+            PreserveMatched -> case miss2 of
+              DropMissing -> pure (Tip k1 bm1)
+              PreserveMissing -> pure (Tip k1 (bm1 .|. bm2))
+              FilterMissing miss2f -> undefined
+            FilterMatched matchf -> undefined
+          FilterMissing miss1f -> undefined
+      | k1 <  k2  = liftA2 (subdoubleton k1 k2) (g1k k1 x1) (g2k k2 x2)
+    --     {-
+    --     = link_ k1 k2 <$> subsingletonBy g1k k1 x1 <*> subsingletonBy g2k k2 x2
+    --     -}
+    --   | otherwise = liftA2 (subdoubleton k2 k1) (g2k k2 x2) (g1k k1 x1)
+    -- {-# INLINE mergeTips #-}
 
   --   subdoubleton _ _   Nothing Nothing     = Nil
   --   subdoubleton _ k2  Nothing (Just y2)   = Tip k2 y2
